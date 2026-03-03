@@ -6,10 +6,8 @@ Created on Mon Mar  2 20:22:55 2026
 @author: Marcel Hesselberth
 """
 
-import numpy as np
 import networkx as nx
 import re
-import matplotlib.pyplot as plt
 
 
 class Netlist:
