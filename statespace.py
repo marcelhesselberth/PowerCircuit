@@ -22,7 +22,7 @@ class StateSpace:
         u_labels = [c['name'] for c in (v_srcs + i_srcs)]
         B_mna = np.zeros((dim, len(u_labels)))
 
-        # 1. Build MNA Matrices
+        # Build MNA Matrices for R, C, L, V, I
         v_idx = 0
         for c in parser.components:
             n1, n2, val, name = c['n1'], c['n2'], c['val'], c['name']
@@ -44,8 +44,8 @@ class StateSpace:
                 if n1 > 0: B_mna[n1-1, len(v_srcs) + i_srcs.index(c)] = -1
                 if n2 > 0: B_mna[n2-1, len(v_srcs) + i_srcs.index(c)] = 1
 
-        # 2. SVD Reduction (Descriptor to State Space)
-        # Gebruik een zeer kleine shunt voor zwevende nodes (numerieke GND referentie)
+        # SVD Reduction
+        # Uses a very small shunt conductance for floating nodes
         G_mod = G_mat + np.eye(dim) * 1e-16
         U, s, Vh = np.linalg.svd(C_mat)
         rank = np.sum(s > 1e-13)
@@ -61,15 +61,13 @@ class StateSpace:
         self.A = S1_inv @ U1.T @ ((-G_mod) - (-G_mod) @ V2 @ M_inv @ U2.T @ (-G_mod)) @ V1 if rank > 0 else np.zeros((0,0))
         self.B = S1_inv @ U1.T @ (B_mna - (-G_mod) @ V2 @ M_inv @ U2.T @ B_mna) if rank > 0 else np.zeros((0, len(u_labels)))
         
-        # 3. Output Construction
-        #self.y_labels = [f"v_n{i+1}" for i in range(num_nodes)] + [f"i_{b}" for b in branches]
-        # Use parser.node_names to get the original strings (skipping '0' at index 0)
+        # Output
         self.y_labels = [f"v_{parser.node_names[i+1]}" for i in range(num_nodes)] + [f"i_{b}" for b in branches]
 
         self.C_ss, self.D_ss = T_x, T_u
         self.u_labels, self.x_labels = u_labels, [f"x{i}" for i in range(rank)]
 
-        # Extra outputs: Stromen door R en C
+        # Extra outputs: Currents through R and C
         for c in parser.components:
             if c['type'] in ('R', 'C'):
                 row = np.zeros(dim)
