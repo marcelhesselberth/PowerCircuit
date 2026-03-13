@@ -95,17 +95,17 @@ def test_correct_expressions(parser, t_small, expr, expected_at_0):
     (") + 5",            "Mismatched parentheses"),
 
     # Wrong number of function arguments
-    ("sin()",            "Missing argument for 'sin'"),
-    ("sin(1,2)",         "Invalid expression syntax (stack size: 2)"),
-    ("pwm(t)",           "Missing argument for 'pwm'"),
-    ("pwm(t, 0.5)",      "Missing argument for 'pwm'"),
-    ("pulse(t,0,0.2)",   "Missing argument for 'pulse'"),
+    ("sin()",            "Missing argument(s) for function 'sin'"),
+    ("sin(1,2)",         "Invalid expression"),
+    ("pwm(t)",           "Missing argument(s) for function 'pwm'"),
+    ("pwm(t, 0.5)",      "Missing argument(s) for function 'pwm'"),
+    ("pulse(t,0,0.2)",   "Missing argument(s) for function 'pulse'"),
 
     # Syntax / missing operands
-    ("3 + * 4",          "Operator '*' missing left operand"),
-    ("5 / / 2",          "Operator '/' missing left operand"),
-    ("2 3 + 4",          "Missing operator before '3'"),
-    ("+ +",              "Expression ends prematurely or is incomplete"),
+    ("3 + * 4",          "Missing left operand for '*'"),
+    ("5 / / 2",          "Missing left operand for '/'"),
+    ("2 3 + 4",          "Expected operator before '3'"),
+    ("+ +",              "Missing operand for unary '+'"),
 
     # Unknown variables
     ("x + 5",            "Unknown variable: 'x'"),
@@ -114,12 +114,12 @@ def test_correct_expressions(parser, t_small, expr, expected_at_0):
     # Comma outside function (tends to cause stack or paren error)
     (", 5",              "Comma outside of function arguments"),
     ("5 + , 3",          "Comma outside of function arguments"),
-    ("(1, 2)",           "Invalid expression syntax (stack size: 2)"),
+    ("(1, 2)",           "Invalid expression"),
 
     # Malformed numbers — current tokenizer accepts many as variables → later fails
-    ("1.2.3",            "could not convert string to float: '1.2.3'"),
-    ("1e",               "Missing operator before 'e'"),
-    ("1e+",              "Missing operator before 'e'"),
+    ("1.2.3",            "Invalid number or unknown variable: '1.2.3'"),
+    ("1e",               "Invalid number or unknown variable: '1e'"),
+    ("1e+",              "Invalid number or unknown variable: '1e+'"),
     ("e4",               "Unknown variable: 'e4'"),
 ])
 def test_error_cases_real_messages(parser, t_small, expr, expected_exc_msg_substring):
@@ -180,14 +180,81 @@ def test_deep_nesting(parser, t_small):
     assert len(result) == len(t_small)
 
 
+# ───────────────────────────────────────────────
+# Prefix tests – should succeed
+# ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("expr, expected_val", [
+    ("1k", 1000.0),
+    ("100m", 0.1),
+    ("1u", 1e-6),
+    ("4.7k + 300", 5000.0),
+    ("Vcc * 10m", 0.05),              # Vcc (5.0) * 0.01
+    ("1M / 1k", 1000.0),              # Mega / kilo
+    ("sin(1000m * pi / 2)", 1.0),     # 1000m is 1
+    ("500u * 2k", 1.0),               # 0.0005 * 2000
+    ("1e-3 * 1k", 1.0),               # Mix van scientific en prefix
+    ("100n * 10**9", 100.0),          # nano
+    ("1p * 1T", 1.0),                 # pico * Tera
+    ("1f * 1e15", 1.0),               # femto
+    ("-10k", -10000.0),               # Unaire minus met prefix
+    ("abs(-100m)", 0.1),              # Functie met prefix
+    ("pwm(t, 500m, 1k)", 1.0),        # Meerdere argumenten met prefixes (bij t=0)
+])
+def test_prefixes_correct(parser, t_small, expr, expected_val):
+    postfix = parser.to_postfix(expr)
+    result = parser.evaluate(postfix, t_small)
+    # Check de eerste waarde (t=0)
+    assert_array_close(result[0], expected_val)
 
 
+@pytest.mark.parametrize("expr, expected_at_0", [
+    ("1e-3", 0.001),                  # Scientific notation (geen prefix '3')
+    ("1m", 0.001),                    # Prefix notation
+])
+def test_scientific_vs_prefix(parser, t_small, expr, expected_at_0):
+    # Deze test garandeert dat 'e' in 1e3 niet als variabele of prefix wordt gezien
+    postfix = parser.to_postfix(expr)
+    result = parser.evaluate(postfix, t_small)
+    assert_array_close(result[0], expected_at_0)
 
 
+# ───────────────────────────────────────────────
+# Prefix Error cases
+# ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("expr, expected_exc_msg_substring", [
+    ("10x", "Invalid number or unknown variable: '10x'"),      # 'x' is geen prefix
+    ("10 k", "Expected operator before 'k'"), # Spatie tussen getal en prefix (als k een var is)
+    ("k10", "Unknown variable: 'k10'"),      # Prefix voor het getal
+    ("1mk", "Invalid number or unknown variable: '1mk'"),      # Dubbele prefix (niet toegestaan)
+    ("1e-3m", "Invalid number or unknown variable: '1e-3m'"),  # Prefix direct na exponent zonder spatie
+    ("1.0e3k", "Invalid number or unknown variable: '1.0e3k'"),  # Prefix direct na exponen
+])
+def test_prefix_errors(parser, t_small, expr, expected_exc_msg_substring):
+    with pytest.raises(ValueError) as exc_info:
+        postfix = parser.to_postfix(expr)
+        _ = parser.evaluate(postfix, t_small)
+    assert expected_exc_msg_substring in str(exc_info.value)
 
 
+# ───────────────────────────────────────────────
+# Extra complexe expressies (Prefix + Functies)
+# ───────────────────────────────────────────────
 
+def test_complex_prefix_expression(parser, t_small):
+    # Expressie: Vcc (5) * sin(2 * pi * 50 * t) + 100m
+    # Bij t=0: 5 * sin(0) + 0.1 = 0.1
+    expr = "Vcc * sin(2 * pi * 50 * t) + 100m"
+    postfix = parser.to_postfix(expr)
+    result = parser.evaluate(postfix, t_small)
+    assert_array_close(result[0], 0.1)
 
-
-
+def test_prefix_in_pwm(parser):
+    # t=0, duty=0.5, freq=1kHz. PWM bij t=0 is altijd 1.0 (of 0.999...)
+    t = np.array([0.0, 0.0001]) 
+    expr = "pwm(t, 500m, 1k)" 
+    postfix = parser.to_postfix(expr)
+    result = parser.evaluate(postfix, t)
+    assert result[0] == 1.0
 
